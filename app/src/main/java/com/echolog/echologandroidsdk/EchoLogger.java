@@ -2,8 +2,11 @@ package com.echolog.echologandroidsdk;
 
 import android.Manifest;
 import android.app.Activity;
+import android.bluetooth.BluetoothAdapter;
 import android.content.Context;
+import android.content.pm.PackageInfo;
 import android.content.pm.PackageManager;
+import android.os.Build;
 import android.support.v4.app.ActivityCompat;
 import android.support.v4.content.ContextCompat;
 import android.telephony.TelephonyManager;
@@ -37,12 +40,19 @@ public class EchoLogger {
     private String deviceId;
     private String sessionId;
     private String applicationId;
+    private String os = "Android";
+    private String osVersion = "";
+    private String deviceType = "";
+    private String appVersion = "";
+    private int buildVersion = -1;
+    private String deviceName;
 
     private boolean isInternetPermissionGranted = false;
     private boolean askedForInternetPermission = false;
     private boolean askedForDeviceStatusPermission = false;
 
     private JSONArray jsonMessagesArray = new JSONArray();
+    private JSONObject jsonDeviceInfo = new JSONObject();
     private boolean loggingEnabled = true;
 
     private Object mutex = new Object();
@@ -53,7 +63,7 @@ public class EchoLogger {
         this.mainActivity = mainActivity;
         this.sessionId = UUID.randomUUID().toString();
 
-        readDeviceId();
+        readDeviceInfo();
         checkForInternetPermission();
 
         this.sendLogsThread = new SendLogsThread();
@@ -93,7 +103,7 @@ public class EchoLogger {
         }
     }
 
-    private void readDeviceId() {
+    private void readDeviceInfo() {
         if (deviceId != null || askedForDeviceStatusPermission)
             return;
 
@@ -102,9 +112,36 @@ public class EchoLogger {
             ActivityCompat.requestPermissions(mainActivity, new String[]{ Manifest.permission.READ_PHONE_STATE },
                     ECHOLOG_PERMISSION_REQUEST_READ_PHONE_STATE);
         } else {
-            TelephonyManager tManager = (TelephonyManager) mainActivity.getBaseContext()
-                    .getSystemService(Context.TELEPHONY_SERVICE);
+            Context baseContext = mainActivity.getBaseContext();
+            TelephonyManager tManager = (TelephonyManager) baseContext.getSystemService(Context.TELEPHONY_SERVICE);
             deviceId = strToUUID(tManager.getDeviceId().toString());
+
+            try {
+                BluetoothAdapter myDevice = BluetoothAdapter.getDefaultAdapter();
+                deviceName = myDevice.getName();
+            } catch (Exception e) { }
+
+            osVersion = Build.VERSION.RELEASE;
+            deviceType = Build.MANUFACTURER + " " + Build.MODEL;
+
+            try {
+                PackageManager manager = baseContext.getPackageManager();
+                PackageInfo info = manager.getPackageInfo(baseContext.getPackageName(), 0);
+                appVersion = info.versionName;
+                buildVersion = info.versionCode;
+            } catch (PackageManager.NameNotFoundException e) {
+                e.printStackTrace();
+            }
+
+            try {
+                jsonDeviceInfo.put("os", os);
+                jsonDeviceInfo.put("os_version", osVersion);
+                jsonDeviceInfo.put("device_type", deviceType);
+                jsonDeviceInfo.put("app_version", appVersion);
+                if (buildVersion > 0) jsonDeviceInfo.put("build_version", buildVersion);
+            } catch (JSONException e) {
+                e.printStackTrace();
+            }
         }
 
         askedForDeviceStatusPermission = true;
@@ -154,7 +191,7 @@ public class EchoLogger {
                     }
 
                     checkForInternetPermission();
-                    readDeviceId();
+                    readDeviceInfo();
 
                     if (deviceId == null) {
                         delay();
@@ -178,6 +215,8 @@ public class EchoLogger {
                         jsonParams.put("device_id", deviceId);
                         jsonParams.put("session_id", sessionId);
                         jsonParams.put("messages", jsonMessagesArray);
+                        if (deviceName != null && !deviceName.isEmpty()) jsonParams.put("name", deviceName);
+                        jsonParams.put("device_info", jsonDeviceInfo);
                     } catch (JSONException e) {
                         e.printStackTrace();
                     }
@@ -213,7 +252,6 @@ public class EchoLogger {
                         StringBuffer response = new StringBuffer();
                         while ((line = rd.readLine()) != null) {
                             response.append(line);
-                            response.append('\r');
                         }
                         rd.close();
 
