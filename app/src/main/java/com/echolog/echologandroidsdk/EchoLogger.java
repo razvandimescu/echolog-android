@@ -31,7 +31,7 @@ public class EchoLogger {
 
     private static final int        ECHOLOG_PERMISSION_REQUEST_READ_PHONE_STATE     = 2000;
     private static final int        ECHOLOG_PERMISSION_REQUEST_INTERNET             = 2001;
-    private static final String     SERVER_URL                                      = "http://www.echolog.io/logs";
+    private static final String     SERVER_URL                                      = "https://www.echolog.io/logs";
     private static final long       SEND_INTERVAL                                   = 15 * 1000;
     private static final long       CHECK_ENABLED_INTERVAL                          = 30 * 60 * 1000;
 
