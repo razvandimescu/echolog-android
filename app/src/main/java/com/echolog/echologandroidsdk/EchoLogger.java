@@ -1,13 +1,12 @@
 package com.echolog.echologandroidsdk;
 
 import android.Manifest;
-import android.app.Activity;
 import android.bluetooth.BluetoothAdapter;
 import android.content.Context;
 import android.content.pm.PackageInfo;
 import android.content.pm.PackageManager;
 import android.os.Build;
-import android.support.v4.app.ActivityCompat;
+import android.provider.Settings;
 import android.support.v4.content.ContextCompat;
 import android.telephony.TelephonyManager;
 
@@ -27,15 +26,14 @@ import java.util.UUID;
  * Created by cozu on 31.01.2017.
  */
 
-public class EchoLogger {
+public abstract class EchoLogger {
 
-    private static final int        ECHOLOG_PERMISSION_REQUEST_READ_PHONE_STATE     = 2000;
-    private static final int        ECHOLOG_PERMISSION_REQUEST_INTERNET             = 2001;
     private static final String     SERVER_URL                                      = "https://www.echolog.io/logs";
     private static final long       SEND_INTERVAL                                   = 15 * 1000;
     private static final long       CHECK_ENABLED_INTERVAL                          = 30 * 60 * 1000;
+    private static final String     INVALID_DEVICE_ID                               = "9774d56d682e549c";
 
-    private final Activity mainActivity;
+    private final Context context;
 
     private String deviceId;
     private String sessionId;
@@ -49,7 +47,6 @@ public class EchoLogger {
 
     private boolean isInternetPermissionGranted = false;
     private boolean askedForInternetPermission = false;
-    private boolean askedForDeviceStatusPermission = false;
 
     private JSONArray jsonMessagesArray = new JSONArray();
     private JSONObject jsonDeviceInfo = new JSONObject();
@@ -58,12 +55,13 @@ public class EchoLogger {
     private Object mutex = new Object();
     private SendLogsThread sendLogsThread;
 
-    public EchoLogger(String applicationId, Activity mainActivity) {
+    public EchoLogger(String applicationId, Context context) {
         this.applicationId = applicationId;
-        this.mainActivity = mainActivity;
+        this.context = context;
         this.sessionId = UUID.randomUUID().toString();
 
         readDeviceInfo();
+
         checkForInternetPermission();
 
         this.sendLogsThread = new SendLogsThread();
@@ -103,63 +101,71 @@ public class EchoLogger {
         }
     }
 
-    private void readDeviceInfo() {
-        if (deviceId != null || askedForDeviceStatusPermission)
+
+    private UUID getDeviceUUID(){
+        final String androidId = Settings.Secure.getString(context.getContentResolver(), Settings.Secure.ANDROID_ID);
+        try {
+            if (!INVALID_DEVICE_ID.equals(androidId)) {
+                return UUID.nameUUIDFromBytes(androidId.getBytes("utf8"));
+            } else {
+                final String deviceId = ((TelephonyManager) context.getSystemService(Context.TELEPHONY_SERVICE)).getDeviceId();
+                if (deviceId != null)
+                    return UUID.nameUUIDFromBytes(deviceId.getBytes("utf8"));
+            }
+        } catch (Exception e) {
+        }
+        return UUID.randomUUID();
+    }
+
+    protected void readDeviceInfo() {
+        if (deviceId != null)
             return;
 
-        if (ContextCompat.checkSelfPermission(mainActivity, Manifest.permission.READ_PHONE_STATE)
-                != PackageManager.PERMISSION_GRANTED) {
-            ActivityCompat.requestPermissions(mainActivity, new String[]{ Manifest.permission.READ_PHONE_STATE },
-                    ECHOLOG_PERMISSION_REQUEST_READ_PHONE_STATE);
-        } else {
-            Context baseContext = mainActivity.getBaseContext();
-            TelephonyManager tManager = (TelephonyManager) baseContext.getSystemService(Context.TELEPHONY_SERVICE);
-            deviceId = strToUUID(tManager.getDeviceId().toString());
+        deviceId = getDeviceUUID().toString();
 
-            try {
-                BluetoothAdapter myDevice = BluetoothAdapter.getDefaultAdapter();
-                deviceName = myDevice.getName();
-            } catch (Exception e) { }
+        try {
+            BluetoothAdapter myDevice = BluetoothAdapter.getDefaultAdapter();
+            deviceName = myDevice.getName();
+        } catch (Exception e) { }
 
-            osVersion = Build.VERSION.RELEASE;
-            deviceType = Build.MANUFACTURER + " " + Build.MODEL;
+        osVersion = Build.VERSION.RELEASE;
+        deviceType = Build.MANUFACTURER + " " + Build.MODEL;
 
-            try {
-                PackageManager manager = baseContext.getPackageManager();
-                PackageInfo info = manager.getPackageInfo(baseContext.getPackageName(), 0);
-                appVersion = info.versionName;
-                buildVersion = info.versionCode;
-            } catch (PackageManager.NameNotFoundException e) {
-                e.printStackTrace();
-            }
-
-            try {
-                jsonDeviceInfo.put("os", os);
-                jsonDeviceInfo.put("os_version", osVersion);
-                jsonDeviceInfo.put("device_type", deviceType);
-                jsonDeviceInfo.put("app_version", appVersion);
-                if (buildVersion > 0) jsonDeviceInfo.put("build_version", buildVersion);
-            } catch (JSONException e) {
-                e.printStackTrace();
-            }
+        try {
+            PackageManager manager = context.getPackageManager();
+            PackageInfo info = manager.getPackageInfo(context.getPackageName(), 0);
+            appVersion = info.versionName;
+            buildVersion = info.versionCode;
+        } catch (PackageManager.NameNotFoundException e) {
+            e.printStackTrace();
         }
 
-        askedForDeviceStatusPermission = true;
+        try {
+            jsonDeviceInfo.put("os", os);
+            jsonDeviceInfo.put("os_version", osVersion);
+            jsonDeviceInfo.put("device_type", deviceType);
+            jsonDeviceInfo.put("app_version", appVersion);
+            if (buildVersion > 0) jsonDeviceInfo.put("build_version", buildVersion);
+        } catch (JSONException e) {
+            e.printStackTrace();
+        }
     }
 
     private void checkForInternetPermission() {
-        if (isInternetPermissionGranted || askedForInternetPermission)
+        if (isInternetPermissionGranted)
             return;
 
-        if (ContextCompat.checkSelfPermission(mainActivity, Manifest.permission.INTERNET)
+        if (ContextCompat.checkSelfPermission(context, Manifest.permission.INTERNET)
                 != PackageManager.PERMISSION_GRANTED) {
-            ActivityCompat.requestPermissions(mainActivity, new String[]{Manifest.permission.INTERNET},
-                    ECHOLOG_PERMISSION_REQUEST_INTERNET);
+            if (!askedForInternetPermission) {
+                try {
+                    requestPermission(Manifest.permission.INTERNET);
+                } catch (Exception e) { }
+                askedForInternetPermission = true;
+            }
         } else {
             isInternetPermissionGranted = true;
         }
-
-        askedForInternetPermission = true;
     }
 
     public void stop() {
@@ -282,4 +288,6 @@ public class EchoLogger {
             } catch (InterruptedException e) { }
         }
     }
+
+    public abstract void requestPermission(String permission);
 }

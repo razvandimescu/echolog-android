@@ -15,7 +15,7 @@ import android.widget.Button;
 
 public class MainActivity extends AppCompatActivity {
 
-    EchoLogger logger;
+    MyLogger logger;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -49,7 +49,7 @@ public class MainActivity extends AppCompatActivity {
             }
         });
 
-        logger = new EchoLogger("3-yvxR-_2wB", this);
+        logger = new MyLogger("efcec0b28cef4c0ea7f7d4c52f9e3a8c", this, this);
     }
 
     private void sendLogs(View view) {
