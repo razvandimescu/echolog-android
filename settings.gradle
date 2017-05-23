@@ -1,1 +1,1 @@
-include ':app'
+include ':echolog-android-sdk'

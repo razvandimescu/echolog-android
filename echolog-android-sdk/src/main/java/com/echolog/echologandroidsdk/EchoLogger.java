@@ -20,20 +20,21 @@ import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.net.HttpURLConnection;
 import java.net.URL;
+import java.util.Map;
 import java.util.UUID;
 
 /**
  * Created by cozu on 31.01.2017.
  */
 
-public abstract class EchoLogger {
+public class EchoLogger {
 
     private static final String     SERVER_URL                                      = "https://www.echolog.io/logs";
     private static final long       SEND_INTERVAL                                   = 15 * 1000;
     private static final long       CHECK_ENABLED_INTERVAL                          = 30 * 60 * 1000;
     private static final String     INVALID_DEVICE_ID                               = "9774d56d682e549c";
 
-    private final Context context;
+    private Context context;
 
     private String deviceId;
     private String sessionId;
@@ -46,7 +47,7 @@ public abstract class EchoLogger {
     private String deviceName;
 
     private boolean isInternetPermissionGranted = false;
-    private boolean askedForInternetPermission = false;
+    private boolean isInitialized;
 
     private JSONArray jsonMessagesArray = new JSONArray();
     private JSONObject jsonDeviceInfo = new JSONObject();
@@ -55,22 +56,82 @@ public abstract class EchoLogger {
     private Object mutex = new Object();
     private SendLogsThread sendLogsThread;
 
-    public EchoLogger(String applicationId, Context context) {
-        this.applicationId = applicationId;
-        this.context = context;
-        this.sessionId = UUID.randomUUID().toString();
 
-        readDeviceInfo();
+    private static EchoLogger echoLogger;
 
-        checkForInternetPermission();
-
-        this.sendLogsThread = new SendLogsThread();
-        this.sendLogsThread.start();
+    private EchoLogger() {
+        this.isInitialized = false;
     }
 
-    public void log(String message) {
+    public static void initialize(String applicationId, Context context) {
+        EchoLogger logger = getInstance();
+
+        if (logger.isInitialized)
+            return;
+
+        logger.applicationId = applicationId;
+        logger.context = context;
+        logger.sessionId = UUID.randomUUID().toString();
+
+        logger.readDeviceInfo();
+
+        logger.checkForInternetPermission();
+
+        logger.sendLogsThread = new SendLogsThread();
+        logger.sendLogsThread.start();
+
+        logger.isInitialized = true;
+    }
+
+    private static EchoLogger getInstance() {
+        if (echoLogger == null) {
+            echoLogger = new EchoLogger();
+        }
+
+        return echoLogger;
+    }
+
+    public static void info(String message) {
+        log(EchoLogLevel.INFO, message, null);
+    }
+    public static void info(String message, Map<String, String> customFields) {
+        log(EchoLogLevel.INFO, message, customFields);
+    }
+
+    public static void warning(String message) {
+        log(EchoLogLevel.WARNING, message, null);
+    }
+    public static void warning(String message, Map<String, String> customFields) {
+        log(EchoLogLevel.WARNING, message, customFields);
+    }
+
+    public static void error(String message) {
+        log(EchoLogLevel.ERROR, message, null);
+    }
+    public static void error(String message, Map<String, String> customFields) {
+        log(EchoLogLevel.ERROR, message, customFields);
+    }
+
+    public static void event(String message) { log(EchoLogLevel.EVENT, message, null); }
+    public static void event(String message, Map<String, String> customFields) {
+        log(EchoLogLevel.EVENT, message, customFields);
+    }
+
+    public static void debug(String message) { log(EchoLogLevel.DEBUG, message, null); }
+    public static void debug(String message, Map<String, String> customFields) { log(EchoLogLevel.DEBUG, message, customFields); }
+
+    public static void log(EchoLogLevel level, String message) {
+        log(level, message, null);
+    }
+
+    public static void log(EchoLogLevel level, String message, Map<String, String> customFields) {
         try {
-            if (!loggingEnabled) {
+            EchoLogger logger = getInstance();
+            if (!logger.isInitialized) {
+                System.out.println("EchoLogger: ERROR - Attempt to use EchoLogger before initializing.");
+            }
+
+            if (!logger.loggingEnabled) {
                 return;
             }
 
@@ -79,6 +140,16 @@ public abstract class EchoLogger {
             try {
                 jsonMessage.put("timestamp", System.currentTimeMillis());
                 jsonMessage.put("text", message);
+                jsonMessage.put("level", level.getValue());
+
+                if (customFields != null) {
+                    JSONObject cstmFields = new JSONObject();
+                    for(String key: customFields.keySet()) {
+                        cstmFields.put(key, customFields.get(key));
+
+                    }
+                    jsonMessage.put("info", cstmFields);
+                }
             } catch (JSONException e) {
                 messageOk = false;
                 e.printStackTrace();
@@ -93,8 +164,8 @@ public abstract class EchoLogger {
                 }
             }
 
-            synchronized (mutex) {
-                jsonMessagesArray.put(jsonMessage);
+            synchronized (logger.mutex) {
+                logger.jsonMessagesArray.put(jsonMessage);
             }
         } catch (Exception e) {
             e.printStackTrace();
@@ -136,8 +207,7 @@ public abstract class EchoLogger {
             PackageInfo info = manager.getPackageInfo(context.getPackageName(), 0);
             appVersion = info.versionName;
             buildVersion = info.versionCode;
-        } catch (PackageManager.NameNotFoundException e) {
-            e.printStackTrace();
+        } catch (Exception e) {
         }
 
         try {
@@ -157,12 +227,7 @@ public abstract class EchoLogger {
 
         if (ContextCompat.checkSelfPermission(context, Manifest.permission.INTERNET)
                 != PackageManager.PERMISSION_GRANTED) {
-            if (!askedForInternetPermission) {
-                try {
-                    requestPermission(Manifest.permission.INTERNET);
-                } catch (Exception e) { }
-                askedForInternetPermission = true;
-            }
+            System.out.println("EchoLogger: ERROR - Manifest.permission.INTERNET not granted. Logs will not be sent to server.");
         } else {
             isInternetPermissionGranted = true;
         }
@@ -181,7 +246,7 @@ public abstract class EchoLogger {
         return uuid;
     }
 
-    private class SendLogsThread extends Thread {
+    private static class SendLogsThread extends Thread {
 
         public SendLogsThread() {
             this.setPriority(Thread.MIN_PRIORITY);
@@ -191,25 +256,26 @@ public abstract class EchoLogger {
         public void run() {
             while (!isInterrupted()) {
                 try {
-                    if (!loggingEnabled) {
+                    EchoLogger logger = getInstance();
+                    if (!logger.loggingEnabled) {
                         delay();
                         continue;
                     }
 
-                    checkForInternetPermission();
-                    readDeviceInfo();
+                    logger.checkForInternetPermission();
+                    logger.readDeviceInfo();
 
-                    if (deviceId == null) {
+                    if (logger.deviceId == null) {
                         delay();
                         continue;
                     }
 
-                    if (!isInternetPermissionGranted) {
+                    if (!logger.isInternetPermissionGranted) {
                         delay();
                         continue;
                     }
 
-                    if (jsonMessagesArray.length() == 0) {
+                    if (logger.jsonMessagesArray.length() == 0) {
                         delay();
                         continue;
                     }
@@ -217,20 +283,20 @@ public abstract class EchoLogger {
                     String targetURL = SERVER_URL;
                     JSONObject jsonParams = new JSONObject();
                     try {
-                        jsonParams.put("id", applicationId);
-                        jsonParams.put("device_id", deviceId);
-                        jsonParams.put("session_id", sessionId);
-                        jsonParams.put("messages", jsonMessagesArray);
-                        if (deviceName != null && !deviceName.isEmpty()) jsonParams.put("name", deviceName);
-                        jsonParams.put("device_info", jsonDeviceInfo);
+                        jsonParams.put("id", logger.applicationId);
+                        jsonParams.put("device_id", logger.deviceId);
+                        jsonParams.put("session_id", logger.sessionId);
+                        jsonParams.put("messages", logger.jsonMessagesArray);
+                        if (logger.deviceName != null && !logger.deviceName.isEmpty()) jsonParams.put("name", logger.deviceName);
+                        jsonParams.put("device_info", logger.jsonDeviceInfo);
                     } catch (JSONException e) {
                         e.printStackTrace();
                     }
 
                     String contentAsString;
-                    synchronized (mutex) {
+                    synchronized (logger.mutex) {
                         contentAsString = jsonParams.toString();
-                        jsonMessagesArray = new JSONArray();
+                        logger.jsonMessagesArray = new JSONArray();
                     }
 
                     URL url;
@@ -243,6 +309,7 @@ public abstract class EchoLogger {
                         connection.setRequestProperty("Content-Length", "" + Integer.toString(contentAsString.length()));
                         connection.setRequestProperty("Content-Language", "en-US");
                         connection.setUseCaches(false);
+
                         connection.setDoInput(true);
                         connection.setDoOutput(true);
                         connection.connect();
@@ -263,7 +330,7 @@ public abstract class EchoLogger {
 
                         String responseString = response.toString();
 
-                        loggingEnabled = !responseString.toLowerCase().equals("off");
+                        logger.loggingEnabled = !responseString.toLowerCase().equals("off");
                         delay();
                     } catch (Exception e) {
                         e.printStackTrace();
@@ -280,7 +347,8 @@ public abstract class EchoLogger {
 
         private void delay() {
             try {
-                if (loggingEnabled) {
+                EchoLogger logger = getInstance();
+                if (logger.loggingEnabled) {
                     this.sleep(SEND_INTERVAL);
                 } else {
                     this.sleep(CHECK_ENABLED_INTERVAL);
@@ -288,6 +356,4 @@ public abstract class EchoLogger {
             } catch (InterruptedException e) { }
         }
     }
-
-    public abstract void requestPermission(String permission);
 }

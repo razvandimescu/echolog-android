@@ -8,3 +8,7 @@
 # For customization when using a Version Control System, please read the
 # header note.
 sdk.dir=/home/cozu/Android/Sdk
+
+bintray.user=user
+bintray.apikey=apikey
+bintray.gpg.password=passwd
